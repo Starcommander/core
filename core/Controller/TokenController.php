@@ -1,4 +1,5 @@
 <?php
+
 /**
  * @author Christoph Wurst <christoph@owncloud.com>
  *
@@ -23,8 +24,11 @@ namespace OC\Core\Controller;
 
 use OC\AppFramework\Http;
 use OC\Authentication\Token\DefaultTokenProvider;
+use OC\Authentication\Token\IProvider;
 use OC\Authentication\Token\IToken;
-use OC\User\Manager;
+use OC\Authentication\TwoFactorAuth\Manager as TwoFactorAuthManager;
+use OC\User\Manager as UserManager;
+use OCA\User_LDAP\User\Manager;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\AppFramework\Http\Response;
@@ -33,11 +37,14 @@ use OCP\Security\ISecureRandom;
 
 class TokenController extends Controller {
 
-	/** @var Manager */
+	/** @var UserManager */
 	private $userManager;
 
-	/** @var DefaultTokenProvider */
+	/** @var IProvider */
 	private $tokenProvider;
+
+	/** @var TwoFactorAuthManager */
+	private $twoFactorAuthManager;
 
 	/** @var ISecureRandom */
 	private $secureRandom;
@@ -49,12 +56,12 @@ class TokenController extends Controller {
 	 * @param DefaultTokenProvider $tokenProvider
 	 * @param ISecureRandom $secureRandom
 	 */
-	public function __construct($appName, IRequest $request, Manager $userManager, DefaultTokenProvider $tokenProvider,
-		ISecureRandom $secureRandom) {
+	public function __construct($appName, IRequest $request, UserManager $userManager, IProvider $tokenProvider, TwoFactorAuthManager $twoFactorAuthManager, ISecureRandom $secureRandom) {
 		parent::__construct($appName, $request);
 		$this->userManager = $userManager;
 		$this->tokenProvider = $tokenProvider;
 		$this->secureRandom = $secureRandom;
+		$this->twoFactorAuthManager = $twoFactorAuthManager;
 	}
 
 	/**
@@ -70,20 +77,27 @@ class TokenController extends Controller {
 	 */
 	public function generateToken($user, $password, $name = 'unknown client') {
 		if (is_null($user) || is_null($password)) {
-			$response = new Response();
+			$response = new JSONResponse();
 			$response->setStatus(Http::STATUS_UNPROCESSABLE_ENTITY);
 			return $response;
 		}
 		$loginResult = $this->userManager->checkPassword($user, $password);
 		if ($loginResult === false) {
-			$response = new Response();
+			$response = new JSONResponse();
 			$response->setStatus(Http::STATUS_UNAUTHORIZED);
 			return $response;
 		}
+
+		if ($this->twoFactorAuthManager->isTwoFactorAuthenticated($loginResult)) {
+			$resp = new JSONResponse();
+			$resp->setStatus(Http::STATUS_UNAUTHORIZED);
+			return $resp;
+		}
+
 		$token = $this->secureRandom->generate(128);
 		$this->tokenProvider->generateToken($token, $loginResult->getUID(), $user, $password, $name, IToken::PERMANENT_TOKEN);
 		return [
-			'token' => $token,
+		    'token' => $token,
 		];
 	}
 
